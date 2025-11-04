@@ -7,31 +7,25 @@ const GLOB_ENDING = '.service.spec.ts';
 const HTTP_PKG = "@angular/common/http";
 const HTTP_TEST_PKG = "@angular/common/http/testing";
 
-/* ---------- FS helpers ---------- */
 const read = f => fs.readFileSync(f, 'utf8');
 const write = (f, d) => fs.writeFileSync(f, d, 'utf8');
 
-/* ---------- Import helpers ---------- */
+/* --- helpers for import manipulation --- */
 function removeNamedImports(src, modulePath, namesToRemove) {
-  const re = new RegExp(
-    `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`,
-    'g'
-  );
+  const re = new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`, 'g');
   return src.replace(re, (m, inside) => {
     const kept = inside
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-      .filter(n => !namesToRemove.includes(n.replace(/\s+as\s+.*/,'').trim()));
-    if (!kept.length) return ''; // supprime toute la ligne si vide
+      .filter(n => !namesToRemove.includes(n.replace(/\s+as\s+.*/, '').trim()));
+    if (!kept.length) return '';
     return `import { ${kept.join(', ')} } from '${modulePath}';`;
   });
 }
 
 function addNamedImports(src, modulePath, namesToAdd) {
-  const re = new RegExp(
-    `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`
-  );
+  const re = new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`);
   if (re.test(src)) {
     return src.replace(re, (m, inside) => {
       const have = new Set(inside.split(',').map(s => s.trim()).filter(Boolean));
@@ -42,83 +36,96 @@ function addNamedImports(src, modulePath, namesToAdd) {
   return `import { ${namesToAdd.join(', ')} } from '${modulePath}';\n` + src;
 }
 
-/* ---------- TestBed object helpers ---------- */
-function removeFromImportsArray(configBlock) {
-  return configBlock.replace(/imports\s*:\s*\[([\s\S]*?)\]/g, (m, inner) => {
+/* --- TestBed manipulation --- */
+function removeFromImportsArray(block) {
+  return block.replace(/imports\s*:\s*\[([\s\S]*?)\]/g, (m, inner) => {
     const items = inner
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-      .filter(x => !/^HttpClientModule$/.test(x))
-      .filter(x => !/^HttpClientTestingModule$/.test(x));
+      .filter(x => !/^HttpClient(Module|TestingModule)$/.test(x));
     return `imports: [ ${items.join(', ')} ]`;
   });
 }
 
-function ensureProvidersIfNeeded(configBlock, needProviders) {
-  if (!needProviders) return configBlock;
-
-  const want = ['provideHttpClient()', 'provideHttpClientTesting()'];
-  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(configBlock);
+function ensureProviders(block, providersToAdd) {
+  if (providersToAdd.length === 0) return block;
+  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(block);
 
   if (hasProviders) {
-    return configBlock.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
+    return block.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
       const raw = inner.split(',').map(s => s.trim()).filter(Boolean);
       const have = new Set(raw);
-      want.forEach(w => have.add(w));
+      providersToAdd.forEach(w => have.add(w));
       return `providers: [ ${Array.from(have).join(', ')} ]`;
     });
   }
 
-  // insérer après imports si présent, sinon au début de l’objet
-  if (/imports\s*:/.test(configBlock)) {
-    return configBlock.replace(
+  if (/imports\s*:/.test(block)) {
+    return block.replace(
       /(imports\s*:\s*\[[\s\S]*?\])\s*(,?)/,
-      (m, imp) => `${imp}, providers: [ ${want.join(', ')} ]`
+      (m, imp) => `${imp}, providers: [ ${providersToAdd.join(', ')} ]`
     );
   }
-  return configBlock.replace(/^\s*/, lead => `${lead}providers: [ ${want.join(', ')} ], `);
+  return block.replace(/^\s*/, lead => `${lead}providers: [ ${providersToAdd.join(', ')} ], `);
 }
 
-/* ---------- Detect HttpClient usage in the service ---------- */
-function serviceUsesHttpClient(servicePath) {
-  if (!fs.existsSync(servicePath)) return false;
-  const s = read(servicePath);
+/* --- Extract injected services from the .service.ts file --- */
+function detectInjectedServices(servicePath) {
+  if (!fs.existsSync(servicePath)) return [];
+  const src = read(servicePath);
 
-  // heuristiques sûres :
-  // 1) import de HttpClient
-  const hasImport =
-    /import\s*\{[^}]*\bHttpClient\b[^}]*\}\s*from\s*['"]@angular\/common\/http['"]/.test(s);
+  const services = new Set();
 
-  // 2) HttpClient typé dans le constructeur
-  const inCtor = /constructor\s*\([^)]*\bHttpClient\b[^)]*\)/.test(s);
+  // constructor-based injection
+  const ctorMatch = src.match(/constructor\s*\(([^)]*)\)/);
+  if (ctorMatch && ctorMatch[1]) {
+    const params = ctorMatch[1].split(',');
+    for (const p of params) {
+      const typeMatch = p.match(/:\s*([A-Z][A-Za-z0-9_]+)/);
+      if (typeMatch) services.add(typeMatch[1]);
+    }
+  }
 
-  // 3) Utilisation explicite comme type ou membre
-  const typed = /\bHttpClient\b/.test(s) && (/private|public|readonly/.test(s) || inCtor);
+  // inject() function syntax (Angular 14+)
+  const injectCalls = [...src.matchAll(/inject\s*\(\s*([A-Z][A-Za-z0-9_]+)/g)];
+  injectCalls.forEach(m => services.add(m[1]));
 
-  return hasImport || inCtor || typed;
+  return Array.from(services);
 }
 
-/* ---------- Transform a single spec file ---------- */
-function transformSpec(src, needProviders) {
-  // 1) TestBed blocks
+/* --- Build providers from detected services --- */
+function buildProviders(services) {
+  const providers = [];
+  const lower = s => s.toLowerCase();
+
+  for (const svc of services) {
+    if (svc === 'HttpClient') {
+      providers.push('provideHttpClient()', 'provideHttpClientTesting()');
+    } else {
+      providers.push(svc); // assume standard Angular DI class
+    }
+  }
+  return providers;
+}
+
+/* --- Main transform --- */
+function transformSpec(src, providers) {
   const reCfg = /TestBed\.configureTestingModule\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
-  let touchedCfg = false;
-
-  let out = src.replace(reCfg, (m, objInner) => {
-    touchedCfg = true;
-    let obj = removeFromImportsArray(objInner);
-    obj = ensureProvidersIfNeeded(obj, needProviders);
-    return `TestBed.configureTestingModule({${obj}})`;
+  let found = false;
+  let out = src.replace(reCfg, (m, obj) => {
+    found = true;
+    let newObj = removeFromImportsArray(obj);
+    newObj = ensureProviders(newObj, providers);
+    return `TestBed.configureTestingModule({${newObj}})`;
   });
 
-  if (!touchedCfg) return { updated: false, content: src, reason: 'no TestBed.configureTestingModule found' };
+  if (!found) return { updated: false, content: src };
 
-  // 2) Imports split: on retire modules dépréciés; on ajoute les providers seulement si needed
-  out = removeNamedImports(out, HTTP_PKG, ['HttpClientModule']);
-  out = removeNamedImports(out, HTTP_TEST_PKG, ['HttpClientTestingModule']);
-
-  if (needProviders) {
+  // Update imports if HttpClient involved
+  if (providers.some(p => p.includes('provideHttpClient'))) {
+    out = removeNamedImports(out, HTTP_PKG, ['HttpClientModule']);
+    out = removeNamedImports(out, HTTP_TEST_PKG, ['HttpClientTestingModule']);
     out = addNamedImports(out, HTTP_PKG, ['provideHttpClient']);
     out = addNamedImports(out, HTTP_TEST_PKG, ['provideHttpClientTesting']);
   }
@@ -126,7 +133,7 @@ function transformSpec(src, needProviders) {
   return { updated: out !== src, content: out };
 }
 
-/* ---------- Walk ---------- */
+/* --- Walk --- */
 function walk(dir, acc = []) {
   for (const e of fs.readdirSync(dir)) {
     const fp = path.join(dir, e);
@@ -137,35 +144,28 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-/* ---------- Main ---------- */
-(function main () {
-  const files = walk(ROOT);
-  if (!files.length) {
-    console.log('Aucun fichier *.service.spec.ts trouvé.');
-    return;
-  }
-  console.log(`🔍 ${files.length} fichier(s) trouvé(s).`);
+/* --- Entry --- */
+(function main() {
+  const specs = walk(ROOT);
+  if (!specs.length) return console.log('Aucun fichier *.service.spec.ts trouvé.');
+  console.log(`🔍 ${specs.length} fichier(s) trouvé(s).`);
 
-  for (const spec of files) {
-    const svc = spec.replace(/\.service\.spec\.ts$/, '.service.ts');
-    const needProviders = serviceUsesHttpClient(svc);
+  for (const spec of specs) {
+    const servicePath = spec.replace(/\.service\.spec\.ts$/, '.service.ts');
+    const injected = detectInjectedServices(servicePath);
+    const providers = buildProviders(injected);
 
     const original = read(spec);
-    const { updated, content, reason } = transformSpec(original, needProviders);
+    const { updated, content } = transformSpec(original, providers);
 
     if (!updated) {
-      console.log(`⚠️  Ignored: ${spec}${reason ? ` (${reason})` : ''}`);
+      console.log(`⚠️  Ignored: ${spec} (no change)`);
       continue;
     }
 
-    // backup
-    write(spec + '.bak', original);
     write(spec, content);
-
-    console.log(
-      `✅ Migrated: ${spec} ${needProviders ? '(providers ajoutés)' : '(modules nettoyés, pas de providers nécessaires)'}`
-    );
+    console.log(`✅ Updated: ${spec} (${providers.length ? 'added providers: ' + providers.join(', ') : 'clean only'})`);
   }
 
-  console.log('🎉 Fini.');
+  console.log('🎉 Migration terminée.');
 })();
