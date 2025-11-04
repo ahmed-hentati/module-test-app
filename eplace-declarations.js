@@ -1,10 +1,18 @@
 const fs = require('fs');
 const path = require('path');
 
-const targetDir = process.cwd(); // current directory
+const targetDir = process.cwd(); // Dossier courant
 
 function replaceInFile(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
+
+  // Ignorer si le fichier contient déjà un tableau imports
+  if (content.match(/\bimports\s*:\s*\[/)) {
+    console.log(`⚠️  Ignored (already has imports): ${filePath}`);
+    return;
+  }
+
+  // Remplacer declarations par imports
   if (content.includes('declarations')) {
     const updated = content.replace(/\bdeclarations\b/g, 'imports');
     fs.writeFileSync(filePath, updated, 'utf8');
