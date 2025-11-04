@@ -1,0 +1,30 @@
+const fs = require('fs');
+const path = require('path');
+
+const targetDir = process.cwd(); // current directory
+
+function replaceInFile(filePath) {
+  const content = fs.readFileSync(filePath, 'utf8');
+  if (content.includes('declarations')) {
+    const updated = content.replace(/\bdeclarations\b/g, 'imports');
+    fs.writeFileSync(filePath, updated, 'utf8');
+    console.log(`✅ Updated: ${filePath}`);
+  }
+}
+
+function walkDir(dir) {
+  const files = fs.readdirSync(dir);
+  for (const file of files) {
+    const filePath = path.join(dir, file);
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) {
+      walkDir(filePath);
+    } else if (file.endsWith('.spec.ts')) {
+      replaceInFile(filePath);
+    }
+  }
+}
+
+console.log('🔍 Searching for .spec.ts files...');
+walkDir(targetDir);
+console.log('🎉 Replacement complete!');
