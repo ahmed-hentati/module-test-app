@@ -3,137 +3,153 @@ const path = require('path');
 
 const ROOT = process.cwd();
 const GLOB_ENDING = '.service.spec.ts';
-
 const HTTP_PKG = "@angular/common/http";
 const HTTP_TEST_PKG = "@angular/common/http/testing";
 
 const read = f => fs.readFileSync(f, 'utf8');
 const write = (f, d) => fs.writeFileSync(f, d, 'utf8');
 
-/* --- helpers for import manipulation --- */
-function removeNamedImports(src, modulePath, namesToRemove) {
+/* ---------------- Detect dependencies in the service file ---------------- */
+function getInjectedServices(servicePath) {
+  if (!fs.existsSync(servicePath)) return [];
+
+  const src = read(servicePath);
+  const deps = new Set();
+
+  // From constructor(private api: ApiService, private http: HttpClient)
+  const ctorMatch = src.match(/constructor\s*\(([\s\S]*?)\)/);
+  if (ctorMatch) {
+    const params = ctorMatch[1]
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    for (const p of params) {
+      const type = (p.match(/:\s*([\w$]+)/) || [])[1];
+      if (type) deps.add(type);
+    }
+  }
+
+  // From inject(FooService)
+  const injectCalls = [...src.matchAll(/inject\s*\(\s*([\w$]+)\s*\)/g)];
+  for (const m of injectCalls) deps.add(m[1]);
+
+  return [...deps];
+}
+
+/* ---------------- Helpers for imports and config ---------------- */
+function removeNamedImports(src, modulePath, names) {
   const re = new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`, 'g');
   return src.replace(re, (m, inside) => {
     const kept = inside
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-      .filter(n => !namesToRemove.includes(n.replace(/\s+as\s+.*/, '').trim()));
-    if (!kept.length) return '';
-    return `import { ${kept.join(', ')} } from '${modulePath}';`;
+      .filter(n => !names.includes(n.replace(/\s+as\s+.*/,'').trim()));
+    return kept.length ? `import { ${kept.join(', ')} } from '${modulePath}';` : '';
   });
 }
 
-function addNamedImports(src, modulePath, namesToAdd) {
+function addNamedImports(src, modulePath, names) {
   const re = new RegExp(`import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`);
   if (re.test(src)) {
     return src.replace(re, (m, inside) => {
       const have = new Set(inside.split(',').map(s => s.trim()).filter(Boolean));
-      namesToAdd.forEach(n => have.add(n));
+      names.forEach(n => have.add(n));
       return `import { ${Array.from(have).join(', ')} } from '${modulePath}';`;
     });
   }
-  return `import { ${namesToAdd.join(', ')} } from '${modulePath}';\n` + src;
+  return `import { ${names.join(', ')} } from '${modulePath}';\n` + src;
 }
 
-/* --- TestBed manipulation --- */
-function removeFromImportsArray(block) {
-  return block.replace(/imports\s*:\s*\[([\s\S]*?)\]/g, (m, inner) => {
+function removeFromImportsArray(configBlock) {
+  return configBlock.replace(/imports\s*:\s*\[([\s\S]*?)\]/g, (m, inner) => {
     const items = inner
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
-      .filter(x => !/^HttpClient(Module|TestingModule)$/.test(x));
+      .filter(x => !/^HttpClientModule$/.test(x))
+      .filter(x => !/^HttpClientTestingModule$/.test(x));
     return `imports: [ ${items.join(', ')} ]`;
   });
 }
 
-function ensureProviders(block, providersToAdd) {
-  if (providersToAdd.length === 0) return block;
-  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(block);
+function ensureProviders(configBlock, needHttp) {
+  if (!needHttp) return configBlock;
+  const want = ['provideHttpClient()', 'provideHttpClientTesting()'];
+  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(configBlock);
 
   if (hasProviders) {
-    return block.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
+    return configBlock.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
       const raw = inner.split(',').map(s => s.trim()).filter(Boolean);
       const have = new Set(raw);
-      providersToAdd.forEach(w => have.add(w));
+      want.forEach(w => have.add(w));
       return `providers: [ ${Array.from(have).join(', ')} ]`;
     });
   }
-
-  if (/imports\s*:/.test(block)) {
-    return block.replace(
+  if (/imports\s*:/.test(configBlock)) {
+    return configBlock.replace(
       /(imports\s*:\s*\[[\s\S]*?\])\s*(,?)/,
-      (m, imp) => `${imp}, providers: [ ${providersToAdd.join(', ')} ]`
+      (m, imp) => `${imp}, providers: [ ${want.join(', ')} ]`
     );
   }
-  return block.replace(/^\s*/, lead => `${lead}providers: [ ${providersToAdd.join(', ')} ], `);
+  return configBlock.replace(/^\s*/, lead => `${lead}providers: [ ${want.join(', ')} ], `);
 }
 
-/* --- Extract injected services from the .service.ts file --- */
-function detectInjectedServices(servicePath) {
-  if (!fs.existsSync(servicePath)) return [];
-  const src = read(servicePath);
+/* ---------------- Update the spec file ---------------- */
+function transformSpec(specContent, deps, needHttp) {
+  let content = specContent;
 
-  const services = new Set();
-
-  // constructor-based injection
-  const ctorMatch = src.match(/constructor\s*\(([^)]*)\)/);
-  if (ctorMatch && ctorMatch[1]) {
-    const params = ctorMatch[1].split(',');
-    for (const p of params) {
-      const typeMatch = p.match(/:\s*([A-Z][A-Za-z0-9_]+)/);
-      if (typeMatch) services.add(typeMatch[1]);
-    }
-  }
-
-  // inject() function syntax (Angular 14+)
-  const injectCalls = [...src.matchAll(/inject\s*\(\s*([A-Z][A-Za-z0-9_]+)/g)];
-  injectCalls.forEach(m => services.add(m[1]));
-
-  return Array.from(services);
-}
-
-/* --- Build providers from detected services --- */
-function buildProviders(services) {
-  const providers = [];
-  const lower = s => s.toLowerCase();
-
-  for (const svc of services) {
-    if (svc === 'HttpClient') {
-      providers.push('provideHttpClient()', 'provideHttpClientTesting()');
-    } else {
-      providers.push(svc); // assume standard Angular DI class
-    }
-  }
-  return providers;
-}
-
-/* --- Main transform --- */
-function transformSpec(src, providers) {
+  // update TestBed config
   const reCfg = /TestBed\.configureTestingModule\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
-  let found = false;
-  let out = src.replace(reCfg, (m, obj) => {
-    found = true;
-    let newObj = removeFromImportsArray(obj);
-    newObj = ensureProviders(newObj, providers);
-    return `TestBed.configureTestingModule({${newObj}})`;
+  content = content.replace(reCfg, (m, inner) => {
+    let obj = removeFromImportsArray(inner);
+    obj = ensureProviders(obj, needHttp);
+    return `TestBed.configureTestingModule({${obj}})`;
   });
 
-  if (!found) return { updated: false, content: src };
+  // clean deprecated imports
+  content = removeNamedImports(content, HTTP_PKG, ['HttpClientModule']);
+  content = removeNamedImports(content, HTTP_TEST_PKG, ['HttpClientTestingModule']);
 
-  // Update imports if HttpClient involved
-  if (providers.some(p => p.includes('provideHttpClient'))) {
-    out = removeNamedImports(out, HTTP_PKG, ['HttpClientModule']);
-    out = removeNamedImports(out, HTTP_TEST_PKG, ['HttpClientTestingModule']);
-    out = addNamedImports(out, HTTP_PKG, ['provideHttpClient']);
-    out = addNamedImports(out, HTTP_TEST_PKG, ['provideHttpClientTesting']);
+  if (needHttp) {
+    content = addNamedImports(content, HTTP_PKG, ['provideHttpClient']);
+    content = addNamedImports(content, HTTP_TEST_PKG, ['provideHttpClientTesting']);
   }
 
-  return { updated: out !== src, content: out };
+  // ensure we import TestBed (some specs may already have it)
+  if (!/import\s*\{[^}]*\bTestBed\b/.test(content)) {
+    content = `import { TestBed } from '@angular/core/testing';\n` + content;
+  }
+
+  // find beforeEach block
+  const beforeEachRe = /beforeEach\s*\(\s*\(\)\s*=>\s*\{\s*([\s\S]*?)\}\s*\)\s*;?/;
+  const serviceVarMatch = content.match(/const\s+(\w+)\s*=\s*TestBed\.inject\(([\w$]+)\)/);
+  let existingInjects = new Set();
+
+  if (beforeEachRe.test(content)) {
+    content = content.replace(beforeEachRe, (m, inner) => {
+      const already = [...inner.matchAll(/TestBed\.inject\(([\w$]+)\)/g)].map(x => x[1]);
+      already.forEach(a => existingInjects.add(a));
+
+      let newLines = '';
+      deps.forEach(d => {
+        if (!existingInjects.has(d) && d !== 'HttpClient') {
+          newLines += `  const ${d.charAt(0).toLowerCase() + d.slice(1)} = TestBed.inject(${d});\n`;
+        }
+      });
+
+      if (newLines) {
+        return `beforeEach(() => {\n${inner}\n${newLines}});`;
+      } else {
+        return m;
+      }
+    });
+  }
+
+  return content;
 }
 
-/* --- Walk --- */
+/* ---------------- Walk ---------------- */
 function walk(dir, acc = []) {
   for (const e of fs.readdirSync(dir)) {
     const fp = path.join(dir, e);
@@ -144,28 +160,25 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-/* --- Entry --- */
+/* ---------------- Main ---------------- */
 (function main() {
-  const specs = walk(ROOT);
-  if (!specs.length) return console.log('Aucun fichier *.service.spec.ts trouvé.');
-  console.log(`🔍 ${specs.length} fichier(s) trouvé(s).`);
-
-  for (const spec of specs) {
-    const servicePath = spec.replace(/\.service\.spec\.ts$/, '.service.ts');
-    const injected = detectInjectedServices(servicePath);
-    const providers = buildProviders(injected);
-
-    const original = read(spec);
-    const { updated, content } = transformSpec(original, providers);
-
-    if (!updated) {
-      console.log(`⚠️  Ignored: ${spec} (no change)`);
-      continue;
-    }
-
-    write(spec, content);
-    console.log(`✅ Updated: ${spec} (${providers.length ? 'added providers: ' + providers.join(', ') : 'clean only'})`);
+  const files = walk(ROOT);
+  if (!files.length) {
+    console.log('No *.service.spec.ts files found.');
+    return;
   }
 
-  console.log('🎉 Migration terminée.');
-})();
+  console.log(`🔍 Found ${files.length} service spec files.\n`);
+
+  for (const specPath of files) {
+    const servicePath = specPath.replace(/\.service\.spec\.ts$/, '.service.ts');
+    const deps = getInjectedServices(servicePath);
+    const needHttp = deps.includes('HttpClient');
+
+    const original = read(specPath);
+    const newContent = transformSpec(original, deps, needHttp);
+
+    if (newContent !== original) {
+      write(specPath, newContent);
+      console.log(`✅ Updated ${path.basename(specPath)} (found: ${deps.join(', ') || 'none'})`);
+    } else {
