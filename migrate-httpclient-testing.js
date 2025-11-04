@@ -2,128 +2,134 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = process.cwd();
-
 const GLOB_ENDING = '.service.spec.ts';
+
 const HTTP_PKG = "@angular/common/http";
 const HTTP_TEST_PKG = "@angular/common/http/testing";
 
-function read(file) { return fs.readFileSync(file, 'utf8'); }
-function write(file, data) { fs.writeFileSync(file, data, 'utf8'); }
+/* ---------- FS helpers ---------- */
+const read = f => fs.readFileSync(f, 'utf8');
+const write = (f, d) => fs.writeFileSync(f, d, 'utf8');
 
-// ---------- utils: import manipulation ----------
+/* ---------- Import helpers ---------- */
 function removeNamedImports(src, modulePath, namesToRemove) {
   const re = new RegExp(
     `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`,
     'g'
   );
   return src.replace(re, (m, inside) => {
-    const list = inside
+    const kept = inside
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
       .filter(n => !namesToRemove.includes(n.replace(/\s+as\s+.*/,'').trim()));
-    if (list.length === 0) return ''; // remove whole line if empty
-    return `import { ${list.join(', ')} } from '${modulePath}';`;
+    if (!kept.length) return ''; // supprime toute la ligne si vide
+    return `import { ${kept.join(', ')} } from '${modulePath}';`;
   });
 }
 
 function addNamedImports(src, modulePath, namesToAdd) {
-  // If an import line exists, merge; else create a new one.
   const re = new RegExp(
     `import\\s*\\{([^}]+)\\}\\s*from\\s*['"]${modulePath}['"];?`
   );
   if (re.test(src)) {
-    src = src.replace(re, (m, inside) => {
-      const have = new Set(
-        inside.split(',').map(s => s.trim()).filter(Boolean)
-      );
+    return src.replace(re, (m, inside) => {
+      const have = new Set(inside.split(',').map(s => s.trim()).filter(Boolean));
       namesToAdd.forEach(n => have.add(n));
       return `import { ${Array.from(have).join(', ')} } from '${modulePath}';`;
     });
-  } else {
-    src = `import { ${namesToAdd.join(', ')} } from '${modulePath}';\n` + src;
   }
-  return src;
+  return `import { ${namesToAdd.join(', ')} } from '${modulePath}';\n` + src;
 }
 
-// ---------- utils: TestBed config manipulation ----------
+/* ---------- TestBed object helpers ---------- */
 function removeFromImportsArray(configBlock) {
-  // configBlock includes the object inside configureTestingModule({...})
   return configBlock.replace(/imports\s*:\s*\[([\s\S]*?)\]/g, (m, inner) => {
-    // split by commas but keep simple (works for identifiers list)
     const items = inner
       .split(',')
       .map(s => s.trim())
       .filter(Boolean)
       .filter(x => !/^HttpClientModule$/.test(x))
       .filter(x => !/^HttpClientTestingModule$/.test(x));
-
-    const pretty = items.length ? `imports: [ ${items.join(', ')} ]` : 'imports: []';
-    return pretty;
+    return `imports: [ ${items.join(', ')} ]`;
   });
 }
 
-function ensureProviders(configBlock) {
-  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(configBlock);
+function ensureProvidersIfNeeded(configBlock, needProviders) {
+  if (!needProviders) return configBlock;
+
   const want = ['provideHttpClient()', 'provideHttpClientTesting()'];
+  const hasProviders = /providers\s*:\s*\[([\s\S]*?)\]/.test(configBlock);
 
   if (hasProviders) {
-    configBlock = configBlock.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
+    return configBlock.replace(/providers\s*:\s*\[([\s\S]*?)\]/, (m, inner) => {
       const raw = inner.split(',').map(s => s.trim()).filter(Boolean);
       const have = new Set(raw);
       want.forEach(w => have.add(w));
       return `providers: [ ${Array.from(have).join(', ')} ]`;
     });
-  } else {
-    // Insert providers after imports if imports exists, else at the start of the object
-    if (/imports\s*:/.test(configBlock)) {
-      configBlock = configBlock.replace(
-        /(imports\s*:\s*\[[\s\S]*?\])\s*(,?)/,
-        (m, imp, comma) => `${imp}, providers: [ ${want.join(', ')} ]`
-      );
-    } else {
-      // add at beginning
-      configBlock = configBlock.replace(/^\s*/, (lead) =>
-        `${lead}providers: [ ${want.join(', ')} ], `
-      );
-    }
   }
-  return configBlock;
+
+  // insérer après imports si présent, sinon au début de l’objet
+  if (/imports\s*:/.test(configBlock)) {
+    return configBlock.replace(
+      /(imports\s*:\s*\[[\s\S]*?\])\s*(,?)/,
+      (m, imp) => `${imp}, providers: [ ${want.join(', ')} ]`
+    );
+  }
+  return configBlock.replace(/^\s*/, lead => `${lead}providers: [ ${want.join(', ')} ], `);
 }
 
-function alreadyMigrated(content) {
-  return /providers\s*:\s*\[[^\]]*provideHttpClientTesting\(\)/.test(content);
+/* ---------- Detect HttpClient usage in the service ---------- */
+function serviceUsesHttpClient(servicePath) {
+  if (!fs.existsSync(servicePath)) return false;
+  const s = read(servicePath);
+
+  // heuristiques sûres :
+  // 1) import de HttpClient
+  const hasImport =
+    /import\s*\{[^}]*\bHttpClient\b[^}]*\}\s*from\s*['"]@angular\/common\/http['"]/.test(s);
+
+  // 2) HttpClient typé dans le constructeur
+  const inCtor = /constructor\s*\([^)]*\bHttpClient\b[^)]*\)/.test(s);
+
+  // 3) Utilisation explicite comme type ou membre
+  const typed = /\bHttpClient\b/.test(s) && (/private|public|readonly/.test(s) || inCtor);
+
+  return hasImport || inCtor || typed;
 }
 
-function transformFile(src) {
-  if (alreadyMigrated(src)) return { updated: false, content: src, reason: 'already migrated' };
-
-  // 1) Update TestBed.configureTestingModule({...})
+/* ---------- Transform a single spec file ---------- */
+function transformSpec(src, needProviders) {
+  // 1) TestBed blocks
   const reCfg = /TestBed\.configureTestingModule\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
-  let anyCfg = false;
-  src = src.replace(reCfg, (m, objInner) => {
-    anyCfg = true;
-    let newObj = removeFromImportsArray(objInner);
-    newObj = ensureProviders(newObj);
-    return `TestBed.configureTestingModule({${newObj}})`;
+  let touchedCfg = false;
+
+  let out = src.replace(reCfg, (m, objInner) => {
+    touchedCfg = true;
+    let obj = removeFromImportsArray(objInner);
+    obj = ensureProvidersIfNeeded(obj, needProviders);
+    return `TestBed.configureTestingModule({${obj}})`;
   });
 
-  if (!anyCfg) return { updated: false, content: src, reason: 'no TestBed.configureTestingModule found' };
+  if (!touchedCfg) return { updated: false, content: src, reason: 'no TestBed.configureTestingModule found' };
 
-  // 2) Imports: remove deprecated modules, add new providers
-  src = removeNamedImports(src, HTTP_PKG, ['HttpClientModule']);
-  src = removeNamedImports(src, HTTP_TEST_PKG, ['HttpClientTestingModule']);
+  // 2) Imports split: on retire modules dépréciés; on ajoute les providers seulement si needed
+  out = removeNamedImports(out, HTTP_PKG, ['HttpClientModule']);
+  out = removeNamedImports(out, HTTP_TEST_PKG, ['HttpClientTestingModule']);
 
-  src = addNamedImports(src, HTTP_PKG, ['provideHttpClient']);
-  src = addNamedImports(src, HTTP_TEST_PKG, ['provideHttpClientTesting']);
+  if (needProviders) {
+    out = addNamedImports(out, HTTP_PKG, ['provideHttpClient']);
+    out = addNamedImports(out, HTTP_TEST_PKG, ['provideHttpClientTesting']);
+  }
 
-  return { updated: true, content: src };
+  return { updated: out !== src, content: out };
 }
 
-// ---------- walk ----------
+/* ---------- Walk ---------- */
 function walk(dir, acc = []) {
-  for (const entry of fs.readdirSync(dir)) {
-    const fp = path.join(dir, entry);
+  for (const e of fs.readdirSync(dir)) {
+    const fp = path.join(dir, e);
     const st = fs.statSync(fp);
     if (st.isDirectory()) walk(fp, acc);
     else if (fp.endsWith(GLOB_ENDING)) acc.push(fp);
@@ -131,28 +137,35 @@ function walk(dir, acc = []) {
   return acc;
 }
 
-// ---------- main ----------
-(function main() {
+/* ---------- Main ---------- */
+(function main () {
   const files = walk(ROOT);
-  if (files.length === 0) {
+  if (!files.length) {
     console.log('Aucun fichier *.service.spec.ts trouvé.');
     return;
   }
   console.log(`🔍 ${files.length} fichier(s) trouvé(s).`);
 
-  for (const f of files) {
-    const original = read(f);
-    const { updated, content, reason } = transformFile(original);
+  for (const spec of files) {
+    const svc = spec.replace(/\.service\.spec\.ts$/, '.service.ts');
+    const needProviders = serviceUsesHttpClient(svc);
+
+    const original = read(spec);
+    const { updated, content, reason } = transformSpec(original, needProviders);
 
     if (!updated) {
-      console.log(`⚠️  Ignored: ${f}${reason ? ` (${reason})` : ''}`);
+      console.log(`⚠️  Ignored: ${spec}${reason ? ` (${reason})` : ''}`);
       continue;
     }
 
-    // backup simple
-    fs.writeFileSync(f + '.bak', original, 'utf8');
-    write(f, content);
-    console.log(`✅ Migrated: ${f}`);
+    // backup
+    write(spec + '.bak', original);
+    write(spec, content);
+
+    console.log(
+      `✅ Migrated: ${spec} ${needProviders ? '(providers ajoutés)' : '(modules nettoyés, pas de providers nécessaires)'}`
+    );
   }
-  console.log('🎉 Migration terminée.');
+
+  console.log('🎉 Fini.');
 })();
