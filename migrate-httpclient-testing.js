@@ -1,14 +1,11 @@
-collectCoverageFrom: [
-    'src/**/*.ts',
-    '!src/main.ts',
-    '!src/polyfills.ts',
-    '!src/environments/**',
-    '!src/**/*.module.ts',
-    '!src/**/constants.ts',
-    '!src/**/*.d.ts',
-    '!src/**/__snapshots__/**',
-    '!src/**/*.mock.ts',
-    '!src/**/index.ts',
-    '!src/app/_shared/services/plugins/*.ts',
-    '!src/app/**/generated/**/*.ts',
-  ],
+export default {
+  preset: 'jest-preset-angular',
+  testEnvironment: 'jsdom',
+  setupFilesAfterEnv: ['<rootDir>/setup-jest.ts'],
+  transform: {
+    '^.+\\.(ts|mjs|html)$': [
+      'jest-preset-angular',
+      { tsconfig: '<rootDir>/tsconfig.spec.json', stringifyContentPathRegex: '\\.html$' }
+    ]
+  }
+};
