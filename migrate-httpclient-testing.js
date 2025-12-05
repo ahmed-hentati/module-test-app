@@ -358,3 +358,99 @@ export class ArchiveTableComponent {
 }
 
 
+// src/app/pages/archive-page/archive-page.component.ts
+
+import { Component, OnInit, signal, effect } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { ArchiveTableComponent } from '../../components/archive-table/archive-table.component';
+import { ArchiveService } from '../../services/archive.service';
+import { ArchiveItem, CounterpartyArchives } from '../../models/archive.model';
+import { HttpClientModule } from '@angular/common/http';
+import { ActivatedRoute } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { switchMap, map } from 'rxjs/operators';
+
+@Component({
+  selector: 'app-archive-page',
+  standalone: true,
+  imports: [CommonModule, ArchiveTableComponent, HttpClientModule],
+  providers: [ArchiveService],
+  template: `
+    <div class="container-fluid mt-3">
+      @if (archivesData()) {
+          <div class="d-flex align-items-center mb-3">
+            <h3 class="me-3">Archive</h3>
+            <span class="badge bg-secondary">{{ archivesData()!.counterpartyName }}</span>
+          </div>
+          
+          <app-archive-table
+            title="Counterparty Rating"
+            [data]="ratingArchives()"       
+            [currentPage]="ratingPage()"
+            [pageSize]="10"                 
+            (pageChange)="ratingPage.set($event)">
+          </app-archive-table>
+          
+          <app-archive-table
+            title="GRR Facility"
+            [data]="grrArchives()"
+            [currentPage]="grrPage()"
+            [pageSize]="20"
+            (pageChange)="grrPage.set($event)">
+          </app-archive-table>
+          
+      } @else if (archivesData() === undefined) {
+          <div class="text-center mt-5">Loading archives...</div>
+      } @else {
+          <div class="text-center mt-5">Error fetching archives or ID missing.</div>
+      }
+    </div>
+  `
+})
+export class ArchivePageComponent {
+  // --- 1. SIGNALS DE DONNÉES (Chargement Unique) ---
+  
+  // Le résultat complet de l'API (Observable transformé en Signal)
+  archivesData = toSignal<CounterpartyArchives | undefined>(
+    this.route.paramMap.pipe(
+      // Récupère l'ID 'id' de la route et appelle l'API une seule fois
+      switchMap(params => {
+        const id = params.get('id');
+        // IMPORTANT: Le service doit maintenant retourner l'observable<CounterpartyArchives> complet
+        return id ? this.archiveService.getArchives(id) : [undefined]; 
+      })
+    )
+  );
+
+  // Signaux extraits pour les listes spécifiques (utilisés dans le template)
+  ratingArchives = signal<ArchiveItem[]>([]);
+  grrArchives = signal<ArchiveItem[]>([]);
+  
+  // --- 2. SIGNALS D'ÉTAT (Pagination Côté Client) ---
+  
+  // Index de la page courante pour le tableau Rating (Initialisation à 0)
+  ratingPage = signal(0); 
+  
+  // Index de la page courante pour le tableau GRR (Initialisation à 0)
+  grrPage = signal(0);
+
+  constructor(
+    private route: ActivatedRoute,
+    private archiveService: ArchiveService
+  ) {
+    // --- 3. EFFET POUR TRAITER LES DONNÉES APRÈS L'APPEL API ---
+    // Cet effet s'exécute dès que archivesData() est mis à jour par le toSignal
+    effect(() => {
+        const data = this.archivesData();
+        if (data) {
+            // Mise à jour des listes spécifiques (ratingArchives et grrArchives)
+            this.ratingArchives.set(data.ratingArchives || []);
+            this.grrArchives.set(data.grrArchives || []);
+            
+            // Si les données changent, on réinitialise l'état des pages à la première page (0)
+            this.ratingPage.set(0);
+            this.grrPage.set(0);
+        }
+    });
+  }
+}
