@@ -454,3 +454,101 @@ export class ArchivePageComponent {
     });
   }
 }
+
+
+
+/* src/app/components/custom-paginator/custom-paginator.component.scss */
+
+.paginator-container {
+    padding: 0.5rem 0;
+}
+
+.custom-buttons {
+    .page-item {
+        margin: 0 2px;
+        
+        .page-link {
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            padding: 0.3rem 0.6rem;
+            cursor: pointer;
+            color: #333;
+            background-color: #fff;
+            font-size: 0.8rem;
+            min-width: 40px; 
+            text-align: center;
+            display: inline-flex; // Pour aligner le texte et l'icône si on en ajoute
+            align-items: center;
+            justify-content: center;
+        }
+        
+        // Style spécifique pour les boutons de navigation (Back/Next)
+        &.page-nav .page-link {
+            min-width: 60px;
+            font-weight: 500;
+            // On retire la bordure des boutons Back/Next pour coller au design de la capture
+            border: none; 
+            background-color: #f0f0f0; /* Fond gris clair pour les nav (Back/Next) */
+        }
+        
+        // État actif (numéros de page seulement, comme '1')
+        &.active .page-link {
+            background-color: #4CAF50; 
+            color: white;
+            border-color: #4CAF50;
+        }
+
+        /* --- STYLING SPÉCIFIQUE DES BOUTONS DE NAVIGATION --- */
+        
+        // Bouton 'Back'
+        // Nous allons ajouter un chevron '<' devant 'Back'
+        &.page-nav:first-child .page-link::before {
+            content: '<';
+            margin-right: 5px;
+            font-weight: bold;
+        }
+
+        // Bouton 'Next'
+        // Nous allons ajouter un chevron '>' après 'Next'
+        &.page-nav:last-child .page-link::after {
+            content: '>';
+            margin-left: 5px;
+            font-weight: bold;
+        }
+
+
+        // **CORRECTION DES BOUTONS DÉSACTIVÉS (comme 'Next' à la fin)**
+        // Le fond gris est déjà sur le page-nav, mais on gère l'état 'disabled'
+        &.disabled {
+            .page-link {
+                color: #aaa; /* Texte gris clair */
+                cursor: not-allowed;
+                background-color: #f7f7f7; /* Fond gris très clair (BR05 désactivé) */
+                border-color: #eee;
+            }
+            // Pour les boutons Back/Next, on réapplique un fond gris plus soutenu si désactivé (comme dans la capture)
+            &.page-nav .page-link {
+                 background-color: #e0e0e0; /* Gris moyen pour le bouton désactivé (Next>) */
+                 color: #888;
+                 
+                 // On s'assure que la flèche est également en gris
+                 &::before, &::after {
+                    color: #888;
+                 }
+            }
+        }
+
+        // Les numéros de page (pour s'assurer qu'ils gardent leur style borduré)
+        &.page-num .page-link {
+            border: 1px solid #ccc;
+            background-color: #fff;
+        }
+
+        // Les points de suspension
+        .page-link.dots {
+            border: none;
+            background-color: transparent;
+            cursor: default;
+        }
+    }
+}
