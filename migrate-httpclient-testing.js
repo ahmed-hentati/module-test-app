@@ -197,3 +197,164 @@ export class CustomPaginatorComponent {
 }
 
 
+
+// src/app/components/archive-table/archive-table.component.ts
+
+import { Component, input, output, computed, signal } from '@angular/core';
+import { CommonModule, DatePipe } from '@angular/common';
+import { ArchiveItem } from '../../models/archive.model';
+import { EmptyValuePipe } from '../../pipes/empty-value.pipe';
+import { CustomPaginatorComponent } from '../custom-paginator/custom-paginator.component'; 
+
+@Component({
+  selector: 'app-archive-table',
+  standalone: true,
+  // Ajout du Paginator Custom aux imports
+  imports: [CommonModule, EmptyValuePipe, DatePipe, CustomPaginatorComponent],
+  templateUrl: './archive-table.component.html',
+  styleUrls: ['./archive-table.component.scss']
+})
+export class ArchiveTableComponent {
+  // --- INPUTS & OUTPUTS ---
+  title = input.required<string>();
+  // Input 1: Reçoit TOUTES les données de la part du Parent (Chargement Unique)
+  data = input.required<ArchiveItem[]>(); 
+  // Input 2: L'index de la page courante (géré par le Parent)
+  currentPage = input.required<number>(); 
+  // Input 3: La taille de la page (10 ou 20 selon la section)
+  pageSize = input.required<number>();
+  
+  // Output: Émet la demande de changement de page au composant Parent
+  pageChange = output<number>(); 
+
+  // --- ÉTAT LOCAL ---
+  isCollapsed = signal(false);
+
+  // --- COMPUTED (Logique réactive) ---
+  
+  // 1. Total des éléments
+  totalElements = computed(() => this.data().length);
+
+  // 2. Tri des données complètes (exécuté une seule fois par changement de 'data')
+  sortedData = computed(() => {
+    const rawData = this.data();
+    if (!rawData || rawData.length === 0) return [];
+    
+    // BR01/BR02: Tri par date la plus récente
+    return [...rawData].sort((a, b) => {
+      return new Date(b.archiveDate).getTime() - new Date(a.archiveDate).getTime();
+    });
+  });
+
+  // 3. Découpage Côté Client (Slicing) : Données à afficher
+  displayedData = computed<ArchiveItem[]>(() => {
+    const data = this.sortedData();
+    const pageIndex = this.currentPage(); 
+    const size = this.pageSize();
+
+    const start = pageIndex * size;
+    const end = start + size;
+    
+    // La clé de la pagination client
+    return data.slice(start, end);
+  });
+  
+  // --- ACTIONS ---
+
+  toggleCollapse() {
+    this.isCollapsed.update(v => !v);
+  }
+
+  /**
+   * Reçoit l'index de la nouvelle page émis par le CustomPaginator.
+   * Transfère l'événement au composant parent pour la mise à jour de l'état.
+   * @param newPageIndex L'index de la nouvelle page (0-based)
+   */
+  handlePageChange(newPageIndex: number): void {
+    this.pageChange.emit(newPageIndex);
+  }
+}
+
+
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <h5 class="m-0">
+      ARCHIVE {{ title() | uppercase }} ({{ totalElements() }})
+    </h5>
+    <button class="btn btn-sm btn-link" (click)="toggleCollapse()">
+      {{ isCollapsed() ? '+' : '-' }}
+    </button>
+  </div>
+
+  @if (!isCollapsed()) {
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-striped m-0">
+          <thead>
+            <tr>
+              <th>PDF</th>
+              <th>Workflow ID</th>
+              <th>Archive ID</th>
+              <th>Workflow Status</th>
+              <th>Specific Rating Policy</th>
+              <th>IR Approved</th>
+              <th>CR Approved</th>
+              <th>SU GRR Approved (%)</th>
+              <th>Rating Date</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (item of displayedData(); track item.archiveId) {
+              <tr>
+                <td><a [href]="item.pdfLink"><i class="fa fa-file-pdf-o"></i></a></td>
+                <td>{{ item.workflowId | emptyValue }}</td>
+                <td>{{ item.archiveId | emptyValue }}</td>
+                <td>
+                  {{ item.workflowStatus | emptyValue }} <br>
+                  <small class="text-muted">{{ item.archiveDate | date:'dd/MM/yyyy' }}</small>
+                </td>
+                <td>{{ item.specificRatingPolicy | emptyValue }}</td>
+                <td>{{ item.irApproved | emptyValue }}</td>
+                <td>{{ item.crApproved | emptyValue }}</td>
+                <td>{{ item.suGrrApproved | emptyValue }}</td>
+                <td>{{ item.ratingDate | date:'dd/MM/yyyy' | emptyValue }}</td>
+              </tr>
+            }
+            @empty {
+              <tr>
+                 <td colspan="9" class="text-center">No archives found.</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+
+      @if (totalElements() > pageSize()) {
+        <div class="card-footer p-2">
+            <app-custom-paginator
+                [totalElements]="totalElements()"
+                [currentPage]="currentPage()"
+                [pageSize]="pageSize()"
+                (pageChange)="handlePageChange($event)"> 
+            </app-custom-paginator>
+        </div>
+      }
+    </div>
+  }
+</div>
+
+
+/* src/app/components/archive-table/archive-table.component.scss */
+
+/* Styles généraux du tableau */
+.table small.text-muted {
+    font-size: 0.7rem;
+    display: block; 
+}
+
+/* Assurez-vous que le footer a le bon padding pour le paginator */
+.card-footer {
+    border-top: 1px solid #eee;
+}
+
+
