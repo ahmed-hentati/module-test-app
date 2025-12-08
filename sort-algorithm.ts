@@ -305,5 +305,5 @@ function countingSortByDigit(array: number[], exp: number): void {
 // const sortedCounting = countingSort(numbers);        // [2,3,4,5,8]
 // const sortedRadix = radixSort([170, 45, 75, 90]);    // [45,75,90,170]
 
-// const users = [{ name: 'Ahmed', age: 33 }, { name: 'Wendy', age: 29 }];
+// const users = [{ name: 'Thomas', age: 33 }, { name: 'Wendy', age: 29 }];
 // const sortedByAge = mergeSort(users, (a, b) => a.age - b.age);
