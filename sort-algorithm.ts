@@ -1,177 +1,309 @@
-import { Component, computed, input, output } from '@angular/core';
+// sort-utils.ts
 
-@Component({
-  selector: 'app-custom-paginator',
-  templateUrl: './custom-paginator.component.html',
-  styleUrls: ['./custom-paginator.component.scss'],
-})
-export class CustomPaginatorComponent {
-  // --- INPUTS / OUTPUTS ---
+// Comparateur générique : comme Array.prototype.sort
+export type Comparator<T> = (a: T, b: T) => number;
 
-  totalElements = input.required<number>(); // nombre total d’items
-  currentPage = input.required<number>();   // index de page (0-based)
-  pageSize = input.required<number>();      // taille de page (ex: 10, 20)
+export function defaultCompare<T>(a: T, b: T): number {
+  if (a === b) return 0;
+  // @ts-ignore – pour les types simples (number, string, Date...)
+  return a < b ? -1 : 1;
+}
 
-  pageChange = output<number>();            // émet la nouvelle page (0-based)
+/* ------------------------------------------------------------------ */
+/* 1. Bubble Sort (comparaison, générique)                            */
+/* ------------------------------------------------------------------ */
 
-  // --- COMPUTED ---
+export function bubbleSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  const a = [...array];
+  const n = a.length;
 
-  totalPages = computed(() => {
-    const total = this.totalElements();
-    const size = this.pageSize();
-    return size > 0 ? Math.ceil(total / size) : 0;
-  });
-
-  paginationLabel = computed(() => {
-    const current = this.currentPage();
-    const size = this.pageSize();
-    const total = this.totalElements();
-
-    if (total === 0 || size === 0) {
-      return 'No entries found.';
-    }
-
-    const start = current * size + 1;
-    const end = Math.min((current + 1) * size, total);
-
-    return `Entries ${start} to ${end} of ${total}`;
-  });
-
-  /**
-   * Génère la liste des pages à afficher
-   * -> tableau de numbers (0-based) et de '...'
-   * Règle :
-   *  - on garde toujours : 0, current-1, current, current+1, last
-   *  - si totalPages <= 5 : on affiche tout, sans "..."
-   *  - si gap = 1 : pages consécutives
-   *  - si gap = 2 : on affiche la page manquante (pas de "…")
-   *  - si gap >= 3 : on insère "…" entre les deux
-   */
-  pagesToShow = computed<(number | string)[]>(() => {
-    const current = this.currentPage();
-    const total = this.totalPages();
-
-    if (total <= 0) {
-      return [];
-    }
-
-    // Cas simple : peu de pages -> on affiche toutes les pages (0,1,2,...)
-    if (total <= 5) {
-      return Array.from({ length: total }, (_, i) => i);
-    }
-
-    const last = total - 1;
-
-    // Candidats "importants"
-    const candidates = new Set<number>([
-      0,
-      current - 1,
-      current,
-      current + 1,
-      last,
-    ]);
-
-    const base = [...candidates]
-      .filter((p) => p >= 0 && p < total)
-      .sort((a, b) => a - b);
-
-    // Reduction sans boucle explicite
-    const pages = base.reduce<(number | string)[]>((acc, curr, index, arr) => {
-      if (index === 0) {
-        // Premier élément
-        return [curr];
+  for (let i = 0; i < n - 1; i++) {
+    let swapped = false;
+    for (let j = 0; j < n - 1 - i; j++) {
+      if (compare(a[j], a[j + 1]) > 0) {
+        [a[j], a[j + 1]] = [a[j + 1], a[j]];
+        swapped = true;
       }
-
-      const prev = arr[index - 1];
-      const gap = curr - prev;
-
-      // Pages consécutives
-      if (gap === 1) {
-        return [...acc, curr];
-      }
-
-      // 1 seule page manquante -> on l’affiche
-      if (gap === 2) {
-        const missing = prev + 1;
-        return [...acc, missing, curr];
-      }
-
-      // Vrai trou (2+ pages manquantes) -> on insère "..."
-      return [...acc, '...', curr];
-    }, []);
-
-    return pages;
-  });
-
-  // --- ACTIONS ---
-
-  changePage(page: number | string) {
-    if (typeof page !== 'number') {
-      return;
     }
-    const total = this.totalPages();
-    if (page < 0 || page >= total) {
-      return;
-    }
-    this.pageChange.emit(page);
+    if (!swapped) break;
   }
 
-  goToPrevious() {
-    const current = this.currentPage();
-    if (current > 0) {
-      this.pageChange.emit(current - 1);
+  return a;
+}
+
+/* ------------------------------------------------------------------ */
+/* 2. Selection Sort (comparaison, générique)                         */
+/* ------------------------------------------------------------------ */
+
+export function selectionSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  const a = [...array];
+  const n = a.length;
+
+  for (let i = 0; i < n - 1; i++) {
+    let minIndex = i;
+
+    for (let j = i + 1; j < n; j++) {
+      if (compare(a[j], a[minIndex]) < 0) {
+        minIndex = j;
+      }
+    }
+
+    if (minIndex !== i) {
+      [a[i], a[minIndex]] = [a[minIndex], a[i]];
     }
   }
 
-  goToNext() {
-    const current = this.currentPage();
-    const last = this.totalPages() - 1;
-    if (current < last) {
-      this.pageChange.emit(current + 1);
+  return a;
+}
+
+/* ------------------------------------------------------------------ */
+/* 3. Insertion Sort (comparaison, générique)                         */
+/* ------------------------------------------------------------------ */
+
+export function insertionSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  const a = [...array];
+  const n = a.length;
+
+  for (let i = 1; i < n; i++) {
+    const key = a[i];
+    let j = i - 1;
+
+    while (j >= 0 && compare(a[j], key) > 0) {
+      a[j + 1] = a[j];
+      j--;
     }
+    a[j + 1] = key;
+  }
+
+  return a;
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. Merge Sort (comparaison, générique, stable)                     */
+/* ------------------------------------------------------------------ */
+
+export function mergeSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  if (array.length <= 1) {
+    return [...array];
+  }
+
+  const mid = Math.floor(array.length / 2);
+  const left = mergeSort(array.slice(0, mid), compare);
+  const right = mergeSort(array.slice(mid), compare);
+
+  return merge(left, right, compare);
+}
+
+function merge<T>(left: T[], right: T[], compare: Comparator<T>): T[] {
+  const result: T[] = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < left.length && j < right.length) {
+    if (compare(left[i], right[j]) <= 0) {
+      result.push(left[i]);
+      i++;
+    } else {
+      result.push(right[j]);
+      j++;
+    }
+  }
+
+  while (i < left.length) {
+    result.push(left[i]);
+    i++;
+  }
+
+  while (j < right.length) {
+    result.push(right[j]);
+    j++;
+  }
+
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. Quick Sort (comparaison, générique)                             */
+/* ------------------------------------------------------------------ */
+
+export function quickSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  if (array.length <= 1) {
+    return [...array];
+  }
+
+  const a = [...array];
+  const pivot = a[Math.floor(a.length / 2)];
+
+  const less: T[] = [];
+  const equal: T[] = [];
+  const greater: T[] = [];
+
+  for (const item of a) {
+    const cmp = compare(item, pivot);
+    if (cmp < 0) {
+      less.push(item);
+    } else if (cmp > 0) {
+      greater.push(item);
+    } else {
+      equal.push(item);
+    }
+  }
+
+  return [...quickSort(less, compare), ...equal, ...quickSort(greater, compare)];
+}
+
+/* ------------------------------------------------------------------ */
+/* 6. Heap Sort (comparaison, générique)                              */
+/* ------------------------------------------------------------------ */
+
+export function heapSort<T>(array: T[], compare: Comparator<T> = defaultCompare): T[] {
+  const a = [...array];
+  const n = a.length;
+
+  const parent = (i: number) => Math.floor((i - 1) / 2);
+  const leftChild = (i: number) => 2 * i + 1;
+  const rightChild = (i: number) => 2 * i + 2;
+
+  function siftDown(start: number, end: number): void {
+    let root = start;
+
+    while (leftChild(root) <= end) {
+      let swapIndex = root;
+      const left = leftChild(root);
+      const right = rightChild(root);
+
+      if (compare(a[swapIndex], a[left]) < 0) {
+        swapIndex = left;
+      }
+
+      if (right <= end && compare(a[swapIndex], a[right]) < 0) {
+        swapIndex = right;
+      }
+
+      if (swapIndex === root) {
+        return;
+      } else {
+        [a[root], a[swapIndex]] = [a[swapIndex], a[root]];
+        root = swapIndex;
+      }
+    }
+  }
+
+  // Build max-heap
+  for (let start = parent(n - 1); start >= 0; start--) {
+    siftDown(start, n - 1);
+  }
+
+  // Heap sort
+  for (let end = n - 1; end > 0; end--) {
+    [a[0], a[end]] = [a[end], a[0]];
+    siftDown(0, end - 1);
+  }
+
+  return a;
+}
+
+/* ------------------------------------------------------------------ */
+/* 7. Counting Sort (numérique, valeurs entières seulement)           */
+/* ------------------------------------------------------------------ */
+
+export function countingSort(array: number[], min?: number, max?: number): number[] {
+  if (array.length === 0) return [];
+
+  let localMin = min ?? array[0];
+  let localMax = max ?? array[0];
+
+  // Calcul min / max si non fournis
+  if (min === undefined || max === undefined) {
+    for (let i = 1; i < array.length; i++) {
+      if (array[i] < localMin) localMin = array[i];
+      if (array[i] > localMax) localMax = array[i];
+    }
+  }
+
+  const range = localMax - localMin + 1;
+  const counts = new Array<number>(range).fill(0);
+
+  // Compter
+  for (const num of array) {
+    counts[num - localMin]++;
+  }
+
+  // Reconstruire le tableau
+  const result: number[] = [];
+  for (let i = 0; i < range; i++) {
+    const value = i + localMin;
+    const count = counts[i];
+    for (let c = 0; c < count; c++) {
+      result.push(value);
+    }
+  }
+
+  return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* 8. Radix Sort (numérique, entiers >= 0)                            */
+/* ------------------------------------------------------------------ */
+
+export function radixSort(array: number[]): number[] {
+  if (array.length === 0) return [];
+
+  // Vérif rapide : seulement des entiers >= 0
+  if (!array.every((n) => Number.isInteger(n) && n >= 0)) {
+    throw new Error('radixSort ne gère que les entiers >= 0');
+  }
+
+  const a = [...array];
+  const maxNum = Math.max(...a);
+  let exp = 1; // 1, 10, 100...
+
+  while (Math.floor(maxNum / exp) > 0) {
+    countingSortByDigit(a, exp);
+    exp *= 10;
+  }
+
+  return a;
+}
+
+function countingSortByDigit(array: number[], exp: number): void {
+  const n = array.length;
+  const output = new Array<number>(n);
+  const count = new Array<number>(10).fill(0);
+
+  // Compter les chiffres
+  for (let i = 0; i < n; i++) {
+    const digit = Math.floor(array[i] / exp) % 10;
+    count[digit]++;
+  }
+
+  // Cumulatif
+  for (let i = 1; i < 10; i++) {
+    count[i] += count[i - 1];
+  }
+
+  // Construire output (parcourir à l’envers pour stabilité)
+  for (let i = n - 1; i >= 0; i--) {
+    const digit = Math.floor(array[i] / exp) % 10;
+    output[count[digit] - 1] = array[i];
+    count[digit]--;
+  }
+
+  // Copier dans array
+  for (let i = 0; i < n; i++) {
+    array[i] = output[i];
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* EXEMPLES D'UTILISATION                                             */
+/* ------------------------------------------------------------------ */
 
+// const numbers = [5, 3, 8, 4, 2];
+// const sortedQuick = quickSort(numbers);              // [2,3,4,5,8]
+// const sortedMerge = mergeSort(numbers);              // [2,3,4,5,8]
+// const sortedCounting = countingSort(numbers);        // [2,3,4,5,8]
+// const sortedRadix = radixSort([170, 45, 75, 90]);    // [45,75,90,170]
 
-
-<div class="d-flex justify-content-between align-items-center paginator-container">
-  <div class="text-muted small paginator-label">
-    {{ paginationLabel() }}
-  </div>
-
-  <nav aria-label="Page navigation">
-    <ul class="pagination pagination-sm m-0 custom-buttons">
-
-      <!-- Back -->
-      <li class="page-item page-nav" [class.disabled]="currentPage() === 0">
-        <button class="page-link" (click)="goToPrevious()">Back</button>
-      </li>
-
-      <!-- Pages + "..." -->
-      @for (page of pagesToShow(); track page) {
-        <li
-          class="page-item page-num"
-          [class.active]="page === currentPage()"
-          [class.disabled]="page === '...'"
-        >
-          @if (page === '...') {
-            <span class="page-link">…</span>
-          } @else {
-            <button class="page-link" (click)="changePage(page as number)">
-              {{ (page as number) + 1 }}
-            </button>
-          }
-        </li>
-      }
-
-      <!-- Next -->
-      <li
-        class="page-item page-nav"
-        [class.disabled]="currentPage() === totalPages() - 1"
-      >
-        <button class="page-link" (click)="goToNext()">Next</button>
-      </li>
-    </ul>
-  </nav>
-</div>
+// const users = [{ name: 'Ahmed', age: 33 }, { name: 'Wendy', age: 29 }];
+// const sortedByAge = mergeSort(users, (a, b) => a.age - b.age);
